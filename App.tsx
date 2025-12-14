@@ -120,13 +120,30 @@ const App: React.FC = () => {
 
   const syncCellsToGuest = useCallback((cells: CellData[], status: GameStatus, time: number, flags: number) => {
      if (gameMode === 'multi_host') {
-         network.send({
-            type: 'SYNC_CELLS',
-            cells,
-            status,
-            time,
-            flags
-         } as NetworkAction);
+         // Chunking logic to prevent connection drops on large payloads
+         const CHUNK_SIZE = 500;
+         const totalChunks = Math.ceil(cells.length / CHUNK_SIZE);
+         
+         if (totalChunks === 0) {
+              // Even if no cells change, we might need to sync status (unlikely path but safe to keep)
+              network.send({ type: 'SYNC_CELLS', cells: [], status, time, flags } as NetworkAction);
+              return;
+         }
+
+         for (let i = 0; i < totalChunks; i++) {
+             const chunk = cells.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+             // Only send the final status on the last chunk to avoid premature game-over/win screens on guest
+             const isLast = i === totalChunks - 1;
+             const intermediateStatus = (status === 'won' || status === 'lost') ? 'playing' : status;
+             
+             network.send({
+                type: 'SYNC_CELLS',
+                cells: chunk,
+                status: isLast ? status : intermediateStatus,
+                time,
+                flags
+             } as NetworkAction);
+         }
      }
   }, [gameMode]);
 
@@ -153,11 +170,18 @@ const App: React.FC = () => {
               }
               if (data.type === 'SYNC_CELLS') {
                   setBoard(prev => {
-                      // Clone board
+                      // Clone board logic
+                      // We need to be careful with large boards, so we only clone rows that changed
+                      // But to be safe and React-compliant we need a new reference for the board array
                       const newBoard = [...prev];
                       data.cells.forEach(c => {
                           if (newBoard[c.row]) {
-                            newBoard[c.row] = [...newBoard[c.row]]; // COW
+                            // Copy the row only if we haven't already in this render cycle? 
+                            // React state updates are batched, but here we are inside the callback.
+                            // Since we might receive multiple chunks, and setBoard might be called multiple times rapidly,
+                            // 'prev' will be correct.
+                            // We shallow copy the row array to mutate the cell.
+                            newBoard[c.row] = [...newBoard[c.row]]; 
                             newBoard[c.row][c.col] = c;
                           }
                       });
@@ -348,7 +372,7 @@ const App: React.FC = () => {
 
     // Host/Single Logic
     let newBoard = board;
-    let newStatus = gameStatus;
+    let newStatus: GameStatus = gameStatus;
 
     if (gameStatus === 'idle') {
       newStatus = 'playing';
@@ -366,25 +390,11 @@ const App: React.FC = () => {
       
       if (isImmortal) {
           // IMMORTAL MODE: Don't end game
-          // Mark this mine as revealed/exploded but keep playing
-          // The revealCell logic already revealed it
-          // Just ensure status doesn't go to 'lost'
-          
-          // Force visual update for this specific mine without ending game
-          // Find the changed cell to sync
-          const changedCells: CellData[] = [];
-          
-          // In revealCell, the board is mutated deeply or returned new.
-          // In immortal mode, revealCell reveals the mine.
-          // We just need to check if we won (unlikely if we just hit mine, but maybe it was the last click?)
-          // Usually hitting mine means you can't win in standard, but in immortal you just keep going.
-          // Logic: Revealed mines count towards "revealed" count? No.
-          // Standard checkWin counts non-mine revealed cells.
-          // In Immortal, we just ignore the exploded mine for win condition, or maybe penalize.
-          
-          // We need to send the update that this cell is revealed/exploded
+          // Force visual update for this specific mine
           if (gameMode === 'multi_host') {
              // Find all changed cells to optimize sync
+             // Note: In immortal mode, revealCell reveals the mine.
+             const changedCells: CellData[] = [];
              for(let r=0; r<difficulty.rows; r++){
                  for(let c=0; c<difficulty.cols; c++){
                      if (board[r][c].status !== nextBoard[r][c].status) {
@@ -411,7 +421,7 @@ const App: React.FC = () => {
         syncStateToGuest(finalBoard, 'won', timeElapsed, flagsCount);
       } else {
           // Just a normal update
-          // OPTIMIZATION: Send only diffs if board is huge
+          // OPTIMIZATION: Send only diffs if board is large ( > 50x50 = 2500)
           if (gameMode === 'multi_host' && difficulty.rows * difficulty.cols > 2500) {
              const changedCells: CellData[] = [];
              for(let r=0; r<difficulty.rows; r++){
