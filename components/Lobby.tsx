@@ -34,7 +34,8 @@ const Lobby: React.FC<LobbyProps> = ({
 }) => {
   const [mode, setMode] = useState<'menu' | 'host' | 'join'>('menu');
   const [joinCode, setJoinCode] = useState('');
-  const [generatedCode] = useState(generateShortId());
+  // Use state to hold the code, but update it when hosting starts
+  const [generatedCode, setGeneratedCode] = useState(generateShortId());
 
   const cardStyle = `p-6 rounded-2xl border-2 transition-all ${theme.panelBg} ${theme.panelBorder} ${theme.textMain}`;
 
@@ -70,8 +71,10 @@ const Lobby: React.FC<LobbyProps> = ({
              <div className="grid grid-cols-2 gap-4 opacity-0 animate-slide-up" style={{ animationDelay: '300ms' }}>
                  <button 
                     onClick={() => {
+                        const newCode = generateShortId();
+                        setGeneratedCode(newCode);
                         setMode('host');
-                        onHostGame(generatedCode);
+                        onHostGame(newCode);
                     }}
                     className={`group flex flex-col items-center gap-3 p-6 rounded-2xl border-2 transition-all hover:bg-opacity-10 ${theme.panelBg} ${theme.panelBorder} ${theme.textMain} hover:border-blue-400 hover:-translate-y-1 active:translate-y-0`}
                  >

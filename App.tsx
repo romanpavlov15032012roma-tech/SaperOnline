@@ -219,8 +219,8 @@ const App: React.FC = () => {
       setIsConnecting(true);
       setWaitingForHost(false);
       
-      network.initialize(false);
-      network.connectToHost(code);
+      // Pass code to initialize so it connects automatically when open
+      network.initialize(false, code);
       
       network.onConnect = () => {
           setIsConnecting(false);

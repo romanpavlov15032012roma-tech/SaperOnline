@@ -18,19 +18,32 @@ export class NetworkManager {
     onError: ((err: string) => void) | null = null;
     onOpen: ((id: string) => void) | null = null;
 
-    initialize(isHost: boolean, code?: string) {
-        // Cleanup existing peer if present
-        if (this.peer) {
-            this.peer.destroy();
-            this.peer = null;
+    // Helper to ensure clean state
+    private async cleanupOldPeer() {
+        if (this.conn) {
+            this.conn.close();
+            this.conn = null;
         }
+        if (this.peer) {
+            const oldPeer = this.peer;
+            this.peer = null;
+            oldPeer.destroy();
+            // Give a small grace period for the server to register the disconnect
+            // This helps with "ID unavailable" errors when quickly re-hosting
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+    }
+
+    async initialize(isHost: boolean, code?: string) {
+        await this.cleanupOldPeer();
 
         this.isHost = isHost;
         const myId = isHost && code ? `${ID_PREFIX}${code}` : undefined;
 
-        // Create Peer with config for better reliability
+        console.log('Initializing Peer...', { isHost, myId });
+
         this.peer = new Peer(myId, {
-            debug: 1,
+            debug: 1, // 0: None, 1: Errors, 2: Warnings, 3: All
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
@@ -40,7 +53,7 @@ export class NetworkManager {
         });
 
         this.peer.on('open', (id) => {
-            console.log('My Peer ID is: ' + id);
+            console.log('Peer Opened. ID:', id);
             if (this.onOpen) this.onOpen(id);
             
             if (!isHost && code) {
@@ -50,77 +63,84 @@ export class NetworkManager {
         });
 
         this.peer.on('connection', (conn) => {
+            console.log('Incoming connection...');
             if (this.isHost) {
-                // Host accepts connection
                 this.setupConnection(conn);
                 if (this.onConnect) this.onConnect();
             } else {
-                // Guests don't accept incoming connections usually
+                console.warn('Guest received connection, closing...');
                 conn.close();
             }
         });
 
         this.peer.on('error', (err) => {
             console.error('PeerJS Error:', err);
-            let message = 'Ошибка соединения.';
+            let message = `Ошибка: ${err.type}`;
             if (err.type === 'peer-unavailable') {
                 message = 'Лобби не найдено. Проверьте код.';
             } else if (err.type === 'unavailable-id') {
-                message = 'Этот ID уже занят. Попробуйте снова.';
+                message = 'ID занят. Попробуйте создать лобби снова.';
             } else if (err.type === 'network') {
-                message = 'Проблема с сетью.';
+                message = 'Ошибка сети.';
+            } else if (err.type === 'browser-incompatible') {
+                message = 'Ваш браузер не поддерживает WebRTC.';
+            } else if (err.type === 'socket-error') {
+                message = 'Ошибка сокета. Проверьте соединение.';
             }
             if (this.onError) this.onError(message);
         });
-        
+
         this.peer.on('disconnected', () => {
-            // Auto-reconnect if disconnected from signaling server
-             if (this.peer && !this.peer.destroyed) {
-                 this.peer.reconnect();
-             }
+             console.log('Peer disconnected from server.');
+             // Often happens temporarily, PeerJS usually auto-reconnects to signaling server
         });
     }
 
     connectToHost(code: string) {
-        if (!this.peer) return;
+        if (!this.peer || this.peer.destroyed) {
+            console.error('Cannot connect: Peer not ready');
+            return;
+        }
         
-        console.log(`Connecting to: ${ID_PREFIX}${code}`);
-        const conn = this.peer.connect(`${ID_PREFIX}${code}`, {
-            reliable: true
-        });
+        const targetId = `${ID_PREFIX}${code}`;
+        console.log(`Connecting to host: ${targetId}`);
         
-        conn.on('open', () => {
-            console.log('Connected to host!');
-            this.setupConnection(conn);
-            if (this.onConnect) this.onConnect();
-        });
-
-        conn.on('error', (err) => {
-             console.error('Connection Error:', err);
-             if (this.onError) this.onError('Не удалось подключиться к хосту.');
+        const conn = this.peer.connect(targetId, {
+            reliable: true,
+            serialization: 'json'
         });
         
-        // Handle immediate close
-        conn.on('close', () => {
-            if (this.onError) this.onError('Соединение с хостом закрыто.');
-        });
+        this.setupConnection(conn);
     }
 
     setupConnection(conn: DataConnection) {
-        // Close existing connection if any
-        if (this.conn && this.conn !== conn) {
+        if (this.conn) {
+            console.log('Closing existing connection before new one');
             this.conn.close();
         }
         
         this.conn = conn;
         
+        this.conn.on('open', () => {
+            console.log('DataConnection Opened!');
+            // For guest, this confirms connection to host
+            if (!this.isHost && this.onConnect) {
+                this.onConnect();
+            }
+        });
+
         this.conn.on('data', (data) => {
             if (this.onData) this.onData(data);
         });
 
         this.conn.on('close', () => {
-            console.log('Connection closed');
+            console.log('DataConnection Closed');
             if (this.onError) this.onError('Соединение разорвано');
+        });
+
+        this.conn.on('error', (err) => {
+            console.error('Connection Error:', err);
+            if (this.onError) this.onError('Ошибка соединения');
         });
     }
 
