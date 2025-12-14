@@ -16,52 +16,102 @@ export class NetworkManager {
     onData: ((data: any) => void) | null = null;
     onConnect: (() => void) | null = null;
     onError: ((err: string) => void) | null = null;
+    onOpen: ((id: string) => void) | null = null;
 
     initialize(isHost: boolean, code?: string) {
+        // Cleanup existing peer if present
+        if (this.peer) {
+            this.peer.destroy();
+            this.peer = null;
+        }
+
         this.isHost = isHost;
         const myId = isHost && code ? `${ID_PREFIX}${code}` : undefined;
 
-        this.peer = new Peer(myId);
+        // Create Peer with config for better reliability
+        this.peer = new Peer(myId, {
+            debug: 1,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
+            }
+        });
 
         this.peer.on('open', (id) => {
             console.log('My Peer ID is: ' + id);
+            if (this.onOpen) this.onOpen(id);
+            
             if (!isHost && code) {
-                // If guest, connect immediately to host
+                // If guest, connect immediately to host after we have an ID
                 this.connectToHost(code);
             }
         });
 
         this.peer.on('connection', (conn) => {
             if (this.isHost) {
+                // Host accepts connection
                 this.setupConnection(conn);
                 if (this.onConnect) this.onConnect();
             } else {
-                // Reject connections if we are guest (shouldn't happen)
+                // Guests don't accept incoming connections usually
                 conn.close();
             }
         });
 
         this.peer.on('error', (err) => {
-            console.error(err);
-            if (this.onError) this.onError('Ошибка соединения. Возможно код неверен.');
+            console.error('PeerJS Error:', err);
+            let message = 'Ошибка соединения.';
+            if (err.type === 'peer-unavailable') {
+                message = 'Лобби не найдено. Проверьте код.';
+            } else if (err.type === 'unavailable-id') {
+                message = 'Этот ID уже занят. Попробуйте снова.';
+            } else if (err.type === 'network') {
+                message = 'Проблема с сетью.';
+            }
+            if (this.onError) this.onError(message);
+        });
+        
+        this.peer.on('disconnected', () => {
+            // Auto-reconnect if disconnected from signaling server
+             if (this.peer && !this.peer.destroyed) {
+                 this.peer.reconnect();
+             }
         });
     }
 
     connectToHost(code: string) {
         if (!this.peer) return;
-        const conn = this.peer.connect(`${ID_PREFIX}${code}`);
+        
+        console.log(`Connecting to: ${ID_PREFIX}${code}`);
+        const conn = this.peer.connect(`${ID_PREFIX}${code}`, {
+            reliable: true
+        });
         
         conn.on('open', () => {
+            console.log('Connected to host!');
             this.setupConnection(conn);
             if (this.onConnect) this.onConnect();
         });
 
         conn.on('error', (err) => {
+             console.error('Connection Error:', err);
              if (this.onError) this.onError('Не удалось подключиться к хосту.');
+        });
+        
+        // Handle immediate close
+        conn.on('close', () => {
+            if (this.onError) this.onError('Соединение с хостом закрыто.');
         });
     }
 
     setupConnection(conn: DataConnection) {
+        // Close existing connection if any
+        if (this.conn && this.conn !== conn) {
+            this.conn.close();
+        }
+        
         this.conn = conn;
         
         this.conn.on('data', (data) => {
@@ -69,6 +119,7 @@ export class NetworkManager {
         });
 
         this.conn.on('close', () => {
+            console.log('Connection closed');
             if (this.onError) this.onError('Соединение разорвано');
         });
     }
@@ -76,12 +127,24 @@ export class NetworkManager {
     send(data: any) {
         if (this.conn && this.conn.open) {
             this.conn.send(data);
+        } else {
+            console.warn('Cannot send data, connection not open');
         }
     }
 
     destroy() {
-        if (this.conn) this.conn.close();
-        if (this.peer) this.peer.destroy();
+        if (this.conn) {
+            this.conn.close();
+            this.conn = null;
+        }
+        if (this.peer) {
+            this.peer.destroy();
+            this.peer = null;
+        }
+        this.onData = null;
+        this.onConnect = null;
+        this.onError = null;
+        this.onOpen = null;
     }
 }
 

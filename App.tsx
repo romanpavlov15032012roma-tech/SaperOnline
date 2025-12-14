@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { BoardData, GameStatus, Difficulty, DIFFICULTIES, HighScores, Theme, THEMES, GameMode, NetworkAction } from './types';
 import { 
   createEmptyBoard, 
@@ -40,6 +40,8 @@ const App: React.FC = () => {
   const [gameMode, setGameMode] = useState<GameMode | 'menu'>('menu');
   const [lobbyError, setLobbyError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [guestConnected, setGuestConnected] = useState(false);
+  const [waitingForHost, setWaitingForHost] = useState(false);
 
   // Init audio context on first interaction
   useEffect(() => {
@@ -106,7 +108,13 @@ const App: React.FC = () => {
   useEffect(() => {
       // Network Data Listener
       network.onData = (data: NetworkAction) => {
-          if (gameMode === 'multi_guest') {
+          if (gameMode === 'multi_guest' || waitingForHost) {
+              if (data.type === 'START_GAME') {
+                  setDifficulty(data.difficulty);
+                  setWaitingForHost(false);
+                  setGameMode('multi_guest');
+                  setTimeout(() => initGame(), 50);
+              }
               if (data.type === 'SYNC_BOARD') {
                   setBoard(data.board);
                   setGameStatus(data.status);
@@ -142,17 +150,19 @@ const App: React.FC = () => {
       network.onError = (err) => {
           setLobbyError(err);
           setIsConnecting(false);
-          // If connection fails, maybe go back to menu? 
-          // For now alert is enough
-          alert(err);
-          setGameMode('menu');
+          setWaitingForHost(false);
+          if (gameMode !== 'menu') {
+              alert(err);
+              setGameMode('menu');
+              network.destroy();
+          }
       };
       
       return () => {
           network.onData = null;
           network.onError = null;
       };
-  }); // Run on every render to ensure closure captures latest 'handleCellClick'
+  }); 
 
   // --- Lobby Handlers ---
 
@@ -162,35 +172,49 @@ const App: React.FC = () => {
   };
 
   const handleHostGame = (code: string) => {
+      setLobbyError(null);
       setIsConnecting(true);
+      setGuestConnected(false);
+      
       network.initialize(true, code);
-      network.onConnect = () => {
+      
+      network.onOpen = () => {
           setIsConnecting(false);
-          setGameMode('multi_host');
-          initGame();
-          // Send initial empty board
-          setTimeout(() => {
-              // We need to re-grab the board state here or assume initGame defaults
-              // Using a small delay to ensure React state updates if needed, 
-              // though for host we can just send the fresh board config
-              const rows = difficulty.rows;
-              const cols = difficulty.cols;
-              const empty = createEmptyBoard(rows, cols);
-              syncStateToGuest(empty, 'idle', 0, 0);
-          }, 100);
+      };
+
+      network.onConnect = () => {
+          setGuestConnected(true);
       };
   };
 
+  const handleStartMultiplayer = () => {
+      if (!guestConnected) return;
+      
+      // Notify guest to start
+      network.send({ type: 'START_GAME', difficulty });
+      setGameMode('multi_host');
+      initGame();
+      
+      // Initial Sync
+      setTimeout(() => {
+          const rows = difficulty.rows;
+          const cols = difficulty.cols;
+          const empty = createEmptyBoard(rows, cols);
+          syncStateToGuest(empty, 'idle', 0, 0);
+      }, 100);
+  };
+
   const handleJoinGame = (code: string) => {
-      setIsConnecting(true);
       setLobbyError(null);
+      setIsConnecting(true);
+      setWaitingForHost(false);
+      
       network.initialize(false);
       network.connectToHost(code);
       
       network.onConnect = () => {
           setIsConnecting(false);
-          setGameMode('multi_guest');
-          // Guest waits for sync...
+          setWaitingForHost(true);
       };
   };
 
@@ -199,6 +223,8 @@ const App: React.FC = () => {
       setGameMode('menu');
       setIsConnecting(false);
       setLobbyError(null);
+      setGuestConnected(false);
+      setWaitingForHost(false);
   };
 
 
@@ -231,7 +257,7 @@ const App: React.FC = () => {
       }
     }());
 
-    // Save score only in single player for now to avoid cheating/sync issues
+    // Save score only in single player
     if (gameMode === 'single') {
         const currentBest = highScores[difficulty.name];
         if (currentBest === undefined || finalTime < currentBest) {
@@ -323,9 +349,6 @@ const App: React.FC = () => {
           network.send({ type: 'RESTART', difficulty });
       } else {
           initGame();
-          // If host, we need to sync the reset. 
-          // initGame sets state, but React state updates are async.
-          // We'll trust the effect hooks or sync manually after a delay (simpler here)
           if (gameMode === 'multi_host') {
              setTimeout(() => {
                  const rows = difficulty.rows;
@@ -339,7 +362,6 @@ const App: React.FC = () => {
 
   const handleUpdateCustomSettings = (key: keyof Difficulty, value: number) => {
     if (difficulty.name !== 'Настраиваемый') return;
-    // Only host or single player can change settings
     if (gameMode === 'multi_guest') return;
 
     setDifficulty(prev => {
@@ -375,9 +397,12 @@ const App: React.FC = () => {
                 onSinglePlayer={handleSinglePlayer}
                 onHostGame={handleHostGame}
                 onJoinGame={handleJoinGame}
+                onStartGame={handleStartMultiplayer}
                 isConnecting={isConnecting}
                 error={lobbyError}
                 onBack={handleBackToMenu}
+                guestConnected={guestConnected}
+                waitingForHost={waitingForHost}
             />
             {/* Theme toggle in menu */}
              <div className="absolute bottom-4 right-4 flex gap-2">
