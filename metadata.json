@@ -1,0 +1,5 @@
+{
+  "name": "Modern Minesweeper (Сапёр)",
+  "description": "A modern, responsive implementation of the classic Minesweeper game using React and Tailwind CSS. Features configurable difficulty, safe first click, flood-fill mechanics, and a clean interface.",
+  "requestFramePermissions": []
+}
