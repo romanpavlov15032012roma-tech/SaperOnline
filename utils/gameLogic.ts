@@ -46,7 +46,16 @@ export const initializeBoardWithMines = (
     // Don't place mine on the first clicked cell OR its immediate neighbors (Safe start)
     const isFirstClick = r === firstClickRow && c === firstClickCol;
     
-    if (isFirstClick) continue;
+    // Check neighbors of first click to ensure they are also safe (safe start area)
+    let isNeighborOfFirstClick = false;
+    for(const [dr, dc] of DIRECTIONS) {
+        if(r === firstClickRow + dr && c === firstClickCol + dc) {
+            isNeighborOfFirstClick = true;
+            break;
+        }
+    }
+
+    if (isFirstClick || isNeighborOfFirstClick) continue;
 
     board[r][c].isMine = true;
     minesPlaced++;
@@ -167,6 +176,73 @@ export const revealAllMines = (currentBoard: BoardData, won: boolean): BoardData
     });
   });
   return board;
+};
+
+export const getSmartHint = (board: BoardData): { row: number; col: number; action: 'reveal' | 'flag' } | null => {
+  const rows = board.length;
+  const cols = board[0].length;
+
+  // 1. Try to find a logical move
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const cell = board[r][c];
+      if (cell.status !== 'revealed') continue;
+      if (cell.neighborMines === 0) continue;
+
+      let hiddenNeighbors: {r:number, c:number}[] = [];
+      let flaggedNeighbors = 0;
+
+      DIRECTIONS.forEach(([dr, dc]) => {
+        const nr = r + dr;
+        const nc = c + dc;
+        if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
+          const nCell = board[nr][nc];
+          if (nCell.status === 'hidden') hiddenNeighbors.push({r: nr, c: nc});
+          if (nCell.status === 'flagged') flaggedNeighbors++;
+        }
+      });
+
+      if (hiddenNeighbors.length === 0) continue;
+
+      // Logic A: All hidden neighbors must be mines
+      if (cell.neighborMines === flaggedNeighbors + hiddenNeighbors.length) {
+        return { row: hiddenNeighbors[0].r, col: hiddenNeighbors[0].c, action: 'flag' };
+      }
+
+      // Logic B: All mines are flagged, remaining are safe
+      if (cell.neighborMines === flaggedNeighbors) {
+        return { row: hiddenNeighbors[0].r, col: hiddenNeighbors[0].c, action: 'reveal' };
+      }
+    }
+  }
+
+  // 2. Fallback: Pick a random safe cell or mine if logic fails
+  const hiddenCells: {r:number, c:number, isMine: boolean}[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (board[r][c].status === 'hidden') {
+        hiddenCells.push({r, c, isMine: board[r][c].isMine});
+      }
+    }
+  }
+
+  if (hiddenCells.length === 0) return null;
+
+  // Prefer revealing a safe cell
+  const safeCells = hiddenCells.filter(c => !c.isMine);
+  if (safeCells.length > 0) {
+    const target = safeCells[Math.floor(Math.random() * safeCells.length)];
+    return { row: target.r, col: target.c, action: 'reveal' };
+  }
+
+  // Otherwise flag a mine (should be rare/endgame)
+  const mineCells = hiddenCells.filter(c => c.isMine);
+  if (mineCells.length > 0) {
+    const target = mineCells[Math.floor(Math.random() * mineCells.length)];
+    return { row: target.r, col: target.c, action: 'flag' };
+  }
+
+  return null;
 };
 
 const STORAGE_KEY = 'minesweeper_highscores';

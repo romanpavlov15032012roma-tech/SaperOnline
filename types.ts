@@ -119,11 +119,12 @@ export const THEMES: Theme[] = [
 
 export type NetworkAction = 
   | { type: 'SYNC_BOARD'; board: BoardData; status: GameStatus; time: number; flags: number }
+  | { type: 'SYNC_CELLS'; cells: CellData[]; status: GameStatus; time: number; flags: number }
   | { type: 'CLICK_CELL'; row: number; col: number }
   | { type: 'RIGHT_CLICK_CELL'; row: number; col: number }
-  | { type: 'RESTART'; difficulty: Difficulty }
-  | { type: 'START_GAME'; difficulty: Difficulty }
-  | { type: 'UPDATE_LOBBY'; difficulty: Difficulty };
+  | { type: 'RESTART'; difficulty: Difficulty; isImmortal: boolean }
+  | { type: 'START_GAME'; difficulty: Difficulty; isImmortal: boolean }
+  | { type: 'UPDATE_LOBBY'; difficulty: Difficulty; isImmortal: boolean };
 
 export type GameMode = 'single' | 'multi_host' | 'multi_guest';
 

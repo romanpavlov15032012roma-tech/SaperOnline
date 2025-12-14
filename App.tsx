@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { BoardData, GameStatus, Difficulty, DIFFICULTIES, HighScores, Theme, THEMES, GameMode, NetworkAction, InputMode } from './types';
+import { BoardData, GameStatus, Difficulty, DIFFICULTIES, HighScores, Theme, THEMES, GameMode, NetworkAction, InputMode, CellData } from './types';
 import { 
   createEmptyBoard, 
   initializeBoardWithMines, 
@@ -8,7 +8,8 @@ import {
   checkWin, 
   revealAllMines,
   getHighScores,
-  saveHighScore
+  saveHighScore,
+  getSmartHint
 } from './utils/gameLogic';
 import { initAudio, playClick, playFlag, playUnflag, playExplosion, playWin } from './utils/sound';
 import { network } from './utils/network';
@@ -24,14 +25,20 @@ const App: React.FC = () => {
   const [difficulty, setDifficulty] = useState<Difficulty>(DIFFICULTIES[0]);
   const [theme, setTheme] = useState<Theme>(THEMES[0]);
   const [zoomLevel, setZoomLevel] = useState<number>(35);
-
+  const [isMobileMode, setIsMobileMode] = useState<boolean>(() => {
+     // Auto-detect mobile
+     return typeof window !== 'undefined' && window.innerWidth < 768;
+  });
+  
   // --- Game Play State ---
   const [board, setBoard] = useState<BoardData>([]);
   const [gameStatus, setGameStatus] = useState<GameStatus>('idle');
   const [timeElapsed, setTimeElapsed] = useState(0);
   const [flagsCount, setFlagsCount] = useState(0);
   const [flagHistory, setFlagHistory] = useState<{row: number, col: number}[]>([]);
-  
+  const [hintsLeft, setHintsLeft] = useState(3);
+  const [isImmortal, setIsImmortal] = useState(false);
+
   // --- UI/System State ---
   const [highScores, setHighScores] = useState<HighScores>({});
   const [showLeaderboard, setShowLeaderboard] = useState(false);
@@ -74,6 +81,7 @@ const App: React.FC = () => {
     setFlagsCount(0);
     setFlagHistory([]);
     setNewRecord(false);
+    setHintsLeft(3);
     setHighScores(getHighScores());
   }, [difficulty]);
 
@@ -81,6 +89,7 @@ const App: React.FC = () => {
   useEffect(() => {
      if (gameMode === 'single') {
          initGame();
+         setIsImmortal(false); // Reset to standard for single player
      }
   }, [initGame, gameMode]);
 
@@ -109,12 +118,25 @@ const App: React.FC = () => {
       }
   }, [gameMode]);
 
+  const syncCellsToGuest = useCallback((cells: CellData[], status: GameStatus, time: number, flags: number) => {
+     if (gameMode === 'multi_host') {
+         network.send({
+            type: 'SYNC_CELLS',
+            cells,
+            status,
+            time,
+            flags
+         } as NetworkAction);
+     }
+  }, [gameMode]);
+
   useEffect(() => {
       // Network Data Listener
       network.onData = (data: NetworkAction) => {
           if (gameMode === 'multi_guest' || waitingForHost) {
               if (data.type === 'START_GAME') {
                   setDifficulty(data.difficulty);
+                  setIsImmortal(data.isImmortal);
                   setWaitingForHost(false);
                   setGameMode('multi_guest');
                   setTimeout(() => initGame(), 50);
@@ -129,9 +151,28 @@ const App: React.FC = () => {
                   if (data.status === 'lost') playExplosion();
                   if (data.status === 'won') playWin();
               }
+              if (data.type === 'SYNC_CELLS') {
+                  setBoard(prev => {
+                      // Clone board
+                      const newBoard = [...prev];
+                      data.cells.forEach(c => {
+                          if (newBoard[c.row]) {
+                            newBoard[c.row] = [...newBoard[c.row]]; // COW
+                            newBoard[c.row][c.col] = c;
+                          }
+                      });
+                      return newBoard;
+                  });
+                  setGameStatus(data.status);
+                  setTimeElapsed(data.time);
+                  setFlagsCount(data.flags);
+                  if (data.status === 'lost') playExplosion();
+                  if (data.status === 'won') playWin();
+              }
               if (data.type === 'UPDATE_LOBBY') {
                   // Real-time update in lobby
                   setDifficulty(data.difficulty);
+                  setIsImmortal(data.isImmortal);
               }
           } else if (gameMode === 'multi_host') {
               // Host receives actions from guest
@@ -143,6 +184,7 @@ const App: React.FC = () => {
               }
               if (data.type === 'RESTART') {
                   setDifficulty(data.difficulty);
+                  setIsImmortal(data.isImmortal);
                   // Use timeout to allow state to settle before re-init
                   setTimeout(() => initGame(), 50);
                   // Need to force sync after restart
@@ -193,15 +235,16 @@ const App: React.FC = () => {
       network.onConnect = () => {
           setGuestConnected(true);
           // Sync current lobby settings immediately when guest connects
-          network.send({ type: 'UPDATE_LOBBY', difficulty });
+          network.send({ type: 'UPDATE_LOBBY', difficulty, isImmortal });
       };
   };
 
-  const handleStartMultiplayer = () => {
+  const handleStartMultiplayer = (immortal: boolean) => {
       if (!guestConnected) return;
       
+      setIsImmortal(immortal);
       // Notify guest to start
-      network.send({ type: 'START_GAME', difficulty });
+      network.send({ type: 'START_GAME', difficulty, isImmortal: immortal });
       setGameMode('multi_host');
       initGame();
       
@@ -241,7 +284,14 @@ const App: React.FC = () => {
       setDifficulty(newDiff);
       // Sync to guest if connected
       if (guestConnected) {
-          network.send({ type: 'UPDATE_LOBBY', difficulty: newDiff });
+          network.send({ type: 'UPDATE_LOBBY', difficulty: newDiff, isImmortal });
+      }
+  };
+
+  const handleLobbyImmortalChange = (newImmortal: boolean) => {
+      setIsImmortal(newImmortal);
+      if (guestConnected) {
+          network.send({ type: 'UPDATE_LOBBY', difficulty, isImmortal: newImmortal });
       }
   };
 
@@ -275,8 +325,8 @@ const App: React.FC = () => {
       }
     }());
 
-    // Save score only in single player
-    if (gameMode === 'single') {
+    // Save score only in single player and STANDARD mode
+    if (gameMode === 'single' && !isImmortal) {
         const currentBest = highScores[difficulty.name];
         if (currentBest === undefined || finalTime < currentBest) {
           const updatedScores = saveHighScore(difficulty.name, finalTime);
@@ -313,11 +363,45 @@ const App: React.FC = () => {
 
     if (exploded) {
       playExplosion();
-      newStatus = 'lost';
-      setGameStatus('lost');
-      const finalBoard = revealAllMines(nextBoard, false);
-      setBoard(finalBoard);
-      syncStateToGuest(finalBoard, 'lost', timeElapsed, flagsCount);
+      
+      if (isImmortal) {
+          // IMMORTAL MODE: Don't end game
+          // Mark this mine as revealed/exploded but keep playing
+          // The revealCell logic already revealed it
+          // Just ensure status doesn't go to 'lost'
+          
+          // Force visual update for this specific mine without ending game
+          // Find the changed cell to sync
+          const changedCells: CellData[] = [];
+          
+          // In revealCell, the board is mutated deeply or returned new.
+          // In immortal mode, revealCell reveals the mine.
+          // We just need to check if we won (unlikely if we just hit mine, but maybe it was the last click?)
+          // Usually hitting mine means you can't win in standard, but in immortal you just keep going.
+          // Logic: Revealed mines count towards "revealed" count? No.
+          // Standard checkWin counts non-mine revealed cells.
+          // In Immortal, we just ignore the exploded mine for win condition, or maybe penalize.
+          
+          // We need to send the update that this cell is revealed/exploded
+          if (gameMode === 'multi_host') {
+             // Find all changed cells to optimize sync
+             for(let r=0; r<difficulty.rows; r++){
+                 for(let c=0; c<difficulty.cols; c++){
+                     if (board[r][c].status !== nextBoard[r][c].status) {
+                         changedCells.push(nextBoard[r][c]);
+                     }
+                 }
+             }
+             syncCellsToGuest(changedCells, 'playing', timeElapsed, flagsCount);
+          }
+      } else {
+          // CLASSIC MODE: Game Over
+          newStatus = 'lost';
+          setGameStatus('lost');
+          const finalBoard = revealAllMines(nextBoard, false);
+          setBoard(finalBoard);
+          syncStateToGuest(finalBoard, 'lost', timeElapsed, flagsCount);
+      }
     } else {
       if (checkWin(nextBoard, difficulty)) {
         newStatus = 'won';
@@ -327,7 +411,20 @@ const App: React.FC = () => {
         syncStateToGuest(finalBoard, 'won', timeElapsed, flagsCount);
       } else {
           // Just a normal update
-          syncStateToGuest(nextBoard, newStatus, timeElapsed, flagsCount);
+          // OPTIMIZATION: Send only diffs if board is huge
+          if (gameMode === 'multi_host' && difficulty.rows * difficulty.cols > 2500) {
+             const changedCells: CellData[] = [];
+             for(let r=0; r<difficulty.rows; r++){
+                 for(let c=0; c<difficulty.cols; c++){
+                     if (board[r][c].status !== nextBoard[r][c].status) {
+                         changedCells.push(nextBoard[r][c]);
+                     }
+                 }
+             }
+             syncCellsToGuest(changedCells, newStatus, timeElapsed, flagsCount);
+          } else {
+             syncStateToGuest(nextBoard, newStatus, timeElapsed, flagsCount);
+          }
       }
     }
   };
@@ -351,7 +448,13 @@ const App: React.FC = () => {
 
     const newBoard = toggleFlag(board, row, col);
     setBoard(newBoard);
-    syncStateToGuest(newBoard, gameStatus, timeElapsed, newFlags);
+    
+    // Sync optimization
+    if (gameMode === 'multi_host' && difficulty.rows * difficulty.cols > 2500) {
+        syncCellsToGuest([newBoard[row][col]], gameStatus, timeElapsed, newFlags);
+    } else {
+        syncStateToGuest(newBoard, gameStatus, timeElapsed, newFlags);
+    }
     return newFlags;
   };
 
@@ -396,6 +499,39 @@ const App: React.FC = () => {
     setFlagHistory(prev => prev.slice(0, -1)); // Remove from history
   };
 
+  const handleHint = () => {
+      if (hintsLeft <= 0 || (gameStatus !== 'playing' && gameStatus !== 'idle')) return;
+      if (gameMode === 'multi_guest') return; // Disable for guest for now, or implement logic request
+
+      let targetRow = -1;
+      let targetCol = -1;
+      let action: 'reveal' | 'flag' = 'reveal';
+
+      if (gameStatus === 'idle') {
+          // Random start
+          targetRow = Math.floor(Math.random() * difficulty.rows);
+          targetCol = Math.floor(Math.random() * difficulty.cols);
+      } else {
+          const hint = getSmartHint(board);
+          if (hint) {
+              targetRow = hint.row;
+              targetCol = hint.col;
+              action = hint.action;
+          } else {
+              return; // No hint possible
+          }
+      }
+
+      if (targetRow !== -1) {
+          if (action === 'reveal') {
+              handleCellClick(targetRow, targetCol);
+          } else {
+              handleRightClick(targetRow, targetCol);
+          }
+          setHintsLeft(prev => prev - 1);
+      }
+  };
+
   // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -410,7 +546,7 @@ const App: React.FC = () => {
   const handleReset = () => {
       if (gameMode === 'multi_guest') {
           // Request restart from host
-          network.send({ type: 'RESTART', difficulty });
+          network.send({ type: 'RESTART', difficulty, isImmortal });
       } else {
           initGame();
           if (gameMode === 'multi_host') {
@@ -469,6 +605,8 @@ const App: React.FC = () => {
                 waitingForHost={waitingForHost}
                 currentDifficulty={difficulty}
                 onDifficultyChange={handleLobbyDifficultyChange}
+                isImmortal={isImmortal}
+                onImmortalChange={handleLobbyImmortalChange}
             />
             {/* Theme toggle in menu */}
              <div className="absolute bottom-4 right-4 flex gap-2">
@@ -498,6 +636,11 @@ const App: React.FC = () => {
                     {gameMode === 'multi_host' && 'Онлайн (Хост)'}
                     {gameMode === 'multi_guest' && 'Онлайн (Игрок)'}
                 </p>
+                {isImmortal && (
+                    <span className="inline-block mt-1 text-xs font-bold text-purple-400 border border-purple-500/50 bg-purple-500/10 px-2 py-0.5 rounded">
+                        Режим: Бессмертие
+                    </span>
+                )}
             </div>
             {gameMode !== 'single' && (
                 <div title={gameMode === 'multi_host' ? "Вы сервер" : "Подключено"} className="text-green-500 animate-pulse">
@@ -519,6 +662,11 @@ const App: React.FC = () => {
               onChangeZoom={setZoomLevel}
               onOpenLeaderboard={() => setShowLeaderboard(true)}
               onUndoFlag={handleUndoFlag}
+              onHint={handleHint}
+              hintsLeft={hintsLeft}
+              gameStatus={gameStatus}
+              isMobileMode={isMobileMode}
+              onToggleMobileMode={() => setIsMobileMode(prev => !prev)}
           />
 
           <div className="flex flex-col gap-2">
@@ -561,7 +709,7 @@ const App: React.FC = () => {
                               theme={theme}
                               onClick={handleInteraction}
                               onRightClick={handleRightClick}
-                              disabled={gameStatus === 'won' || gameStatus === 'lost'}
+                              disabled={gameStatus === 'won' || (gameStatus === 'lost' && !isImmortal)}
                           />
                           ))
                       ))}
@@ -574,25 +722,27 @@ const App: React.FC = () => {
              )}
         </div>
 
-        {/* Mobile Input Toggle - Fixed Bottom Right */}
-        <div className="absolute bottom-6 right-6 z-40 lg:hidden">
-             <button 
-                onClick={() => setInputMode(prev => prev === 'dig' ? 'flag' : 'dig')}
-                className={`w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all transform active:scale-90 border-4 ${
-                    inputMode === 'dig' 
-                    ? 'bg-blue-600 border-blue-400 text-white' 
-                    : 'bg-red-600 border-red-400 text-white'
-                }`}
-             >
-                {inputMode === 'dig' ? <Shovel size={28} /> : <Flag size={28} />}
-             </button>
-             <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/70 text-white text-xs px-2 py-1 rounded backdrop-blur-sm whitespace-nowrap opacity-0 animate-fade-in pointer-events-none">
-                 {inputMode === 'dig' ? 'Копать' : 'Флаг'}
-             </div>
-        </div>
+        {/* Mobile Input Toggle - Conditionally Rendered */}
+        {isMobileMode && (
+            <div className="absolute bottom-6 right-6 z-40">
+                <button 
+                    onClick={() => setInputMode(prev => prev === 'dig' ? 'flag' : 'dig')}
+                    className={`w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all transform active:scale-90 border-4 ${
+                        inputMode === 'dig' 
+                        ? 'bg-blue-600 border-blue-400 text-white' 
+                        : 'bg-red-600 border-red-400 text-white'
+                    }`}
+                >
+                    {inputMode === 'dig' ? <Shovel size={28} /> : <Flag size={28} />}
+                </button>
+                <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/70 text-white text-xs px-2 py-1 rounded backdrop-blur-sm whitespace-nowrap opacity-0 animate-fade-in pointer-events-none">
+                    {inputMode === 'dig' ? 'Копать' : 'Флаг'}
+                </div>
+            </div>
+        )}
 
         {/* Overlay for Game Over / Win */}
-        {(gameStatus === 'won' || gameStatus === 'lost') && (
+        {(gameStatus === 'won' || (gameStatus === 'lost' && !isImmortal)) && (
             <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/50 backdrop-blur-[2px] animate-fade-in p-4">
                 <div className={`p-8 rounded-2xl border text-center shadow-2xl transform scale-100 transition-transform max-w-sm w-full ${theme.panelBg} ${theme.panelBorder} ${theme.textMain}`}>
                     <h2 className={`text-4xl font-black mb-2 ${gameStatus === 'won' ? 'text-green-500' : 'text-red-500'}`}>

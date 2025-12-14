@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bomb, Clock, Trophy, Play, Settings, Palette, ZoomIn, Volume2, VolumeX, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Bomb, Clock, Trophy, Play, Settings, Palette, ZoomIn, Volume2, VolumeX, RotateCcw, AlertTriangle, Lightbulb, Smartphone, Monitor } from 'lucide-react';
 import { Difficulty, DIFFICULTIES, Theme, THEMES } from '../types';
 import { toggleMute, getMutedState } from '../utils/sound';
 
@@ -16,6 +16,11 @@ interface ControlsProps {
   onChangeZoom: (zoom: number) => void;
   onOpenLeaderboard: () => void;
   onUndoFlag: () => void;
+  onHint: () => void;
+  hintsLeft: number;
+  gameStatus: string;
+  isMobileMode: boolean;
+  onToggleMobileMode: () => void;
 }
 
 const Controls: React.FC<ControlsProps> = ({ 
@@ -30,7 +35,12 @@ const Controls: React.FC<ControlsProps> = ({
   zoomLevel,
   onChangeZoom,
   onOpenLeaderboard,
-  onUndoFlag
+  onUndoFlag,
+  onHint,
+  hintsLeft,
+  gameStatus,
+  isMobileMode,
+  onToggleMobileMode
 }) => {
   const [isMuted, setIsMuted] = useState(getMutedState());
 
@@ -48,6 +58,7 @@ const Controls: React.FC<ControlsProps> = ({
   const isCustom = currentDifficulty.name === 'Настраиваемый';
   const totalCells = currentDifficulty.rows * currentDifficulty.cols;
   const isPerformanceRisk = totalCells > 2500;
+  const isPlaying = gameStatus === 'playing' || gameStatus === 'idle';
 
   const inputStyle = `w-full p-2 rounded-lg text-sm font-bold border outline-none transition-colors ${
     currentTheme.id === 'retro' 
@@ -71,7 +82,7 @@ const Controls: React.FC<ControlsProps> = ({
             {Math.max(0, minesLeft).toString().padStart(3, '0')}
           </span>
           
-          {/* Undo Button positioned absolutely within the stats card or nearby */}
+          {/* Undo Button */}
           <button 
             onClick={onUndoFlag}
             title="Отменить последний флаг (Ctrl+Z)"
@@ -186,7 +197,7 @@ const Controls: React.FC<ControlsProps> = ({
             </div>
         </div>
 
-        {/* Zoom & Sound Control Row */}
+        {/* Zoom, Sound & Mobile Toggle */}
         <div className="flex gap-3">
             <div className="flex-1 flex flex-col gap-2">
                 <label className={`text-sm font-semibold uppercase tracking-wider ml-1 flex items-center gap-2 ${currentTheme.textSecondary}`}>
@@ -206,20 +217,39 @@ const Controls: React.FC<ControlsProps> = ({
                 </div>
             </div>
             
-             <div className="flex flex-col gap-2 w-1/4">
-                <label className={`text-sm font-semibold uppercase tracking-wider ml-1 flex items-center gap-2 ${currentTheme.textSecondary}`}>
-                    Звук
-                </label>
-                <button 
-                    onClick={handleToggleSound}
-                    className={`h-[42px] flex items-center justify-center rounded-lg border transition-all ${
-                        currentTheme.id === 'retro' 
-                        ? 'bg-white border-gray-400 text-black hover:bg-gray-100' 
-                        : 'bg-black/20 border-white/10 text-white hover:bg-black/30'
-                    }`}
-                >
-                    {isMuted ? <VolumeX size={20} className="text-red-400" /> : <Volume2 size={20} />}
-                </button>
+             <div className="flex gap-2">
+                <div className="flex flex-col gap-2">
+                    <label className={`text-sm font-semibold uppercase tracking-wider ml-1 flex items-center gap-2 ${currentTheme.textSecondary}`}>
+                        Режим
+                    </label>
+                    <button 
+                        onClick={onToggleMobileMode}
+                        title={isMobileMode ? "Режим: Телефон" : "Режим: ПК"}
+                        className={`h-[42px] w-[42px] flex items-center justify-center rounded-lg border transition-all ${
+                            currentTheme.id === 'retro' 
+                            ? 'bg-white border-gray-400 text-black hover:bg-gray-100' 
+                            : 'bg-black/20 border-white/10 text-white hover:bg-black/30'
+                        }`}
+                    >
+                        {isMobileMode ? <Smartphone size={20} /> : <Monitor size={20} />}
+                    </button>
+                </div>
+                 
+                <div className="flex flex-col gap-2">
+                    <label className={`text-sm font-semibold uppercase tracking-wider ml-1 flex items-center gap-2 ${currentTheme.textSecondary}`}>
+                        Звук
+                    </label>
+                    <button 
+                        onClick={handleToggleSound}
+                        className={`h-[42px] w-[42px] flex items-center justify-center rounded-lg border transition-all ${
+                            currentTheme.id === 'retro' 
+                            ? 'bg-white border-gray-400 text-black hover:bg-gray-100' 
+                            : 'bg-black/20 border-white/10 text-white hover:bg-black/30'
+                        }`}
+                    >
+                        {isMuted ? <VolumeX size={20} className="text-red-400" /> : <Volume2 size={20} />}
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -229,13 +259,29 @@ const Controls: React.FC<ControlsProps> = ({
 
       {/* Action Buttons */}
       <div className="flex flex-col gap-3">
-        <button 
-            onClick={onReset}
-            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white font-bold py-4 px-6 rounded-xl transition-all active:scale-95 shadow-lg shadow-blue-900/30 text-lg group"
-        >
-            <Play size={24} fill="currentColor" className="group-hover:scale-110 transition-transform" />
-            <span>Начать игру</span>
-        </button>
+        <div className="flex gap-3">
+             <button 
+                onClick={onReset}
+                className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white font-bold py-4 px-6 rounded-xl transition-all active:scale-95 shadow-lg shadow-blue-900/30 text-lg group"
+            >
+                <Play size={24} fill="currentColor" className="group-hover:scale-110 transition-transform" />
+                <span>Начать</span>
+            </button>
+            
+            <button
+                onClick={onHint}
+                disabled={hintsLeft <= 0 || !isPlaying}
+                className={`flex flex-col items-center justify-center px-4 rounded-xl border transition-all active:scale-95 min-w-[80px] ${
+                    hintsLeft > 0 && isPlaying
+                    ? 'bg-yellow-500/10 border-yellow-500/50 text-yellow-500 hover:bg-yellow-500/20' 
+                    : 'bg-gray-800/30 border-gray-700 text-gray-600 cursor-not-allowed'
+                }`}
+                title="Подсказка"
+            >
+                <Lightbulb size={20} className={hintsLeft > 0 && isPlaying ? "fill-yellow-500/50" : ""} />
+                <span className="text-xs font-bold mt-1">{hintsLeft} шт.</span>
+            </button>
+        </div>
 
         <button 
             onClick={onOpenLeaderboard}

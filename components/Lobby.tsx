@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Users, UserPlus, Play, Copy, ArrowLeft, CheckCircle2, Loader2, Gamepad2, Settings, User } from 'lucide-react';
+import { Users, UserPlus, Play, Copy, ArrowLeft, CheckCircle2, Loader2, Gamepad2, Settings, User, Shield } from 'lucide-react';
 import { generateShortId } from '../utils/network';
 import { Theme, Difficulty, DIFFICULTIES } from '../types';
 
@@ -8,7 +8,7 @@ interface LobbyProps {
   onSinglePlayer: () => void;
   onHostGame: (code: string) => void;
   onJoinGame: (code: string) => void;
-  onStartGame: () => void;
+  onStartGame: (isImmortal: boolean) => void;
   isConnecting: boolean;
   error: string | null;
   onBack: () => void;
@@ -16,6 +16,8 @@ interface LobbyProps {
   waitingForHost: boolean;
   currentDifficulty: Difficulty;
   onDifficultyChange: (d: Difficulty) => void;
+  isImmortal: boolean;
+  onImmortalChange: (v: boolean) => void;
 }
 
 const Lobby: React.FC<LobbyProps> = ({ 
@@ -30,7 +32,9 @@ const Lobby: React.FC<LobbyProps> = ({
     guestConnected,
     waitingForHost,
     currentDifficulty,
-    onDifficultyChange
+    onDifficultyChange,
+    isImmortal,
+    onImmortalChange
 }) => {
   const [mode, setMode] = useState<'menu' | 'host' | 'join'>('menu');
   const [joinCode, setJoinCode] = useState('');
@@ -194,6 +198,18 @@ const Lobby: React.FC<LobbyProps> = ({
                                       ))}
                                   </select>
                               </div>
+
+                              <button
+                                onClick={() => onImmortalChange(!isImmortal)}
+                                className={`w-full flex items-center gap-2 p-2 rounded-lg border text-xs font-bold transition-all ${
+                                    isImmortal 
+                                    ? 'bg-purple-500/20 border-purple-500 text-purple-300' 
+                                    : 'bg-black/20 border-white/10 text-gray-400'
+                                }`}
+                              >
+                                  <Shield size={16} />
+                                  <span>{isImmortal ? 'Режим: Бессмертие' : 'Режим: Классика'}</span>
+                              </button>
                               
                               <div className="grid grid-cols-2 gap-2 text-center">
                                   <div className="bg-black/20 rounded-lg p-2 border border-white/5">
@@ -211,6 +227,9 @@ const Lobby: React.FC<LobbyProps> = ({
                                <p className="text-sm">Хост выбирает настройки...</p>
                                <div className="text-xs opacity-50">Сложность: {currentDifficulty.name}</div>
                                <div className="text-xs opacity-50">{currentDifficulty.rows}x{currentDifficulty.cols}, {currentDifficulty.mines} мин</div>
+                               {isImmortal && (
+                                   <div className="text-xs text-purple-400 font-bold border border-purple-500/50 bg-purple-500/10 px-2 py-1 rounded">Режим Бессмертие</div>
+                               )}
                           </div>
                       )}
                   </div>
@@ -220,7 +239,7 @@ const Lobby: React.FC<LobbyProps> = ({
               <div className="mt-2">
                   {isHost ? (
                       <button 
-                        onClick={onStartGame}
+                        onClick={() => onStartGame(isImmortal)}
                         disabled={!guestConnected}
                         className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg transition-all flex items-center justify-center gap-2 ${
                             guestConnected 
