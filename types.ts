@@ -122,6 +122,9 @@ export type NetworkAction =
   | { type: 'CLICK_CELL'; row: number; col: number }
   | { type: 'RIGHT_CLICK_CELL'; row: number; col: number }
   | { type: 'RESTART'; difficulty: Difficulty }
-  | { type: 'START_GAME'; difficulty: Difficulty };
+  | { type: 'START_GAME'; difficulty: Difficulty }
+  | { type: 'UPDATE_LOBBY'; difficulty: Difficulty };
 
 export type GameMode = 'single' | 'multi_host' | 'multi_guest';
+
+export type InputMode = 'dig' | 'flag';

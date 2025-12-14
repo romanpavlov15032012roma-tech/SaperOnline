@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bomb, Clock, Trophy, Play, Settings, Palette, ZoomIn, Volume2, VolumeX } from 'lucide-react';
+import { Bomb, Clock, Trophy, Play, Settings, Palette, ZoomIn, Volume2, VolumeX, RotateCcw, AlertTriangle } from 'lucide-react';
 import { Difficulty, DIFFICULTIES, Theme, THEMES } from '../types';
 import { toggleMute, getMutedState } from '../utils/sound';
 
@@ -15,6 +15,7 @@ interface ControlsProps {
   zoomLevel: number;
   onChangeZoom: (zoom: number) => void;
   onOpenLeaderboard: () => void;
+  onUndoFlag: () => void;
 }
 
 const Controls: React.FC<ControlsProps> = ({ 
@@ -28,7 +29,8 @@ const Controls: React.FC<ControlsProps> = ({
   onChangeTheme,
   zoomLevel,
   onChangeZoom,
-  onOpenLeaderboard
+  onOpenLeaderboard,
+  onUndoFlag
 }) => {
   const [isMuted, setIsMuted] = useState(getMutedState());
 
@@ -44,6 +46,8 @@ const Controls: React.FC<ControlsProps> = ({
   };
 
   const isCustom = currentDifficulty.name === 'Настраиваемый';
+  const totalCells = currentDifficulty.rows * currentDifficulty.cols;
+  const isPerformanceRisk = totalCells > 2500;
 
   const inputStyle = `w-full p-2 rounded-lg text-sm font-bold border outline-none transition-colors ${
     currentTheme.id === 'retro' 
@@ -58,7 +62,7 @@ const Controls: React.FC<ControlsProps> = ({
       
       {/* Stats Cards */}
       <div className="grid grid-cols-2 gap-4">
-        <div className={`flex flex-col items-center justify-center p-4 rounded-xl border shadow-inner ${currentTheme.id === 'retro' ? 'bg-black text-red-500 border-gray-500' : 'bg-black/20 border-white/10'}`}>
+        <div className={`relative flex flex-col items-center justify-center p-4 rounded-xl border shadow-inner ${currentTheme.id === 'retro' ? 'bg-black text-red-500 border-gray-500' : 'bg-black/20 border-white/10'}`}>
           <div className={`flex items-center gap-2 mb-1 text-sm font-medium uppercase tracking-wider ${currentTheme.textSecondary}`}>
             <Bomb size={16} />
             <span>Мины</span>
@@ -66,6 +70,15 @@ const Controls: React.FC<ControlsProps> = ({
           <span className={`text-3xl font-mono font-bold ${currentTheme.id === 'retro' ? 'text-red-500' : 'text-red-400'}`}>
             {Math.max(0, minesLeft).toString().padStart(3, '0')}
           </span>
+          
+          {/* Undo Button positioned absolutely within the stats card or nearby */}
+          <button 
+            onClick={onUndoFlag}
+            title="Отменить последний флаг (Ctrl+Z)"
+            className="absolute top-2 right-2 p-1.5 rounded-full hover:bg-white/10 text-white/50 hover:text-white transition-colors active:scale-90"
+          >
+            <RotateCcw size={14} />
+          </button>
         </div>
         
         <div className={`flex flex-col items-center justify-center p-4 rounded-xl border shadow-inner ${currentTheme.id === 'retro' ? 'bg-black text-red-500 border-gray-500' : 'bg-black/20 border-white/10'}`}>
@@ -113,7 +126,7 @@ const Controls: React.FC<ControlsProps> = ({
                         <label className={labelStyle}>Ширина</label>
                         <input 
                             type="number" 
-                            min="5" max="50"
+                            min="5" max="1000"
                             value={currentDifficulty.cols}
                             onChange={(e) => onUpdateCustomSettings('cols', parseInt(e.target.value) || 5)}
                             className={inputStyle}
@@ -123,7 +136,7 @@ const Controls: React.FC<ControlsProps> = ({
                         <label className={labelStyle}>Высота</label>
                         <input 
                             type="number" 
-                            min="5" max="50"
+                            min="5" max="1000"
                             value={currentDifficulty.rows}
                             onChange={(e) => onUpdateCustomSettings('rows', parseInt(e.target.value) || 5)}
                             className={inputStyle}
@@ -141,6 +154,12 @@ const Controls: React.FC<ControlsProps> = ({
                         />
                     </div>
                 </div>
+                {isPerformanceRisk && (
+                    <div className="mt-3 flex gap-2 items-start p-2 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-yellow-500 text-xs">
+                        <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                        <span>Внимание: Размер поля более 2500 клеток может замедлить работу слабых устройств.</span>
+                    </div>
+                )}
             </div>
         )}
 

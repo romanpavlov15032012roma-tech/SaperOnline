@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { BoardData, GameStatus, Difficulty, DIFFICULTIES, HighScores, Theme, THEMES, GameMode, NetworkAction } from './types';
+import { BoardData, GameStatus, Difficulty, DIFFICULTIES, HighScores, Theme, THEMES, GameMode, NetworkAction, InputMode } from './types';
 import { 
   createEmptyBoard, 
   initializeBoardWithMines, 
@@ -17,7 +17,7 @@ import Controls from './components/Controls';
 import Leaderboard from './components/Leaderboard';
 import Lobby from './components/Lobby';
 import confetti from 'canvas-confetti';
-import { Wifi, WifiOff } from 'lucide-react';
+import { Wifi, WifiOff, Shovel, Flag } from 'lucide-react';
 
 const App: React.FC = () => {
   // --- Game Config State ---
@@ -30,11 +30,13 @@ const App: React.FC = () => {
   const [gameStatus, setGameStatus] = useState<GameStatus>('idle');
   const [timeElapsed, setTimeElapsed] = useState(0);
   const [flagsCount, setFlagsCount] = useState(0);
+  const [flagHistory, setFlagHistory] = useState<{row: number, col: number}[]>([]);
   
   // --- UI/System State ---
   const [highScores, setHighScores] = useState<HighScores>({});
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [newRecord, setNewRecord] = useState(false);
+  const [inputMode, setInputMode] = useState<InputMode>('dig');
 
   // --- Multiplayer State ---
   const [gameMode, setGameMode] = useState<GameMode | 'menu'>('menu');
@@ -62,13 +64,15 @@ const App: React.FC = () => {
 
   const initGame = useCallback(() => {
     // Single player init logic (also used by Host before sync)
-    const validRows = Math.max(5, Math.min(50, difficulty.rows));
-    const validCols = Math.max(5, Math.min(50, difficulty.cols));
+    // Clamp to min 5, max 1000
+    const validRows = Math.max(5, Math.min(1000, difficulty.rows));
+    const validCols = Math.max(5, Math.min(1000, difficulty.cols));
     
     setBoard(createEmptyBoard(validRows, validCols));
     setGameStatus('idle');
     setTimeElapsed(0);
     setFlagsCount(0);
+    setFlagHistory([]);
     setNewRecord(false);
     setHighScores(getHighScores());
   }, [difficulty]);
@@ -125,6 +129,10 @@ const App: React.FC = () => {
                   if (data.status === 'lost') playExplosion();
                   if (data.status === 'won') playWin();
               }
+              if (data.type === 'UPDATE_LOBBY') {
+                  // Real-time update in lobby
+                  setDifficulty(data.difficulty);
+              }
           } else if (gameMode === 'multi_host') {
               // Host receives actions from guest
               if (data.type === 'CLICK_CELL') {
@@ -139,8 +147,8 @@ const App: React.FC = () => {
                   setTimeout(() => initGame(), 50);
                   // Need to force sync after restart
                   setTimeout(() => {
-                      const validRows = Math.max(5, Math.min(50, data.difficulty.rows));
-                      const validCols = Math.max(5, Math.min(50, data.difficulty.cols));
+                      const validRows = Math.max(5, Math.min(1000, data.difficulty.rows));
+                      const validCols = Math.max(5, Math.min(1000, data.difficulty.cols));
                       syncStateToGuest(createEmptyBoard(validRows, validCols), 'idle', 0, 0);
                   }, 100);
               }
@@ -184,6 +192,8 @@ const App: React.FC = () => {
 
       network.onConnect = () => {
           setGuestConnected(true);
+          // Sync current lobby settings immediately when guest connects
+          network.send({ type: 'UPDATE_LOBBY', difficulty });
       };
   };
 
@@ -225,6 +235,14 @@ const App: React.FC = () => {
       setLobbyError(null);
       setGuestConnected(false);
       setWaitingForHost(false);
+  };
+  
+  const handleLobbyDifficultyChange = (newDiff: Difficulty) => {
+      setDifficulty(newDiff);
+      // Sync to guest if connected
+      if (guestConnected) {
+          network.send({ type: 'UPDATE_LOBBY', difficulty: newDiff });
+      }
   };
 
 
@@ -314,18 +332,11 @@ const App: React.FC = () => {
     }
   };
 
-  const handleRightClick = (row: number, col: number) => {
-    if (gameStatus === 'won' || gameStatus === 'lost') return;
-    
-    // Guest Logic
-    if (gameMode === 'multi_guest') {
-        network.send({ type: 'RIGHT_CLICK_CELL', row, col });
-        return;
-    }
-
-    // Host/Single Logic
+  // Helper to purely toggle a flag without checking history logic
+  // Returns the new flag count
+  const performFlagToggle = (row: number, col: number) => {
     const cell = board[row][col];
-    if (cell.status === 'revealed') return;
+    if (cell.status === 'revealed') return flagsCount;
 
     let newFlags = flagsCount;
     if (cell.status === 'hidden') {
@@ -341,7 +352,60 @@ const App: React.FC = () => {
     const newBoard = toggleFlag(board, row, col);
     setBoard(newBoard);
     syncStateToGuest(newBoard, gameStatus, timeElapsed, newFlags);
+    return newFlags;
   };
+
+  const handleRightClick = (row: number, col: number) => {
+    if (gameStatus === 'won' || gameStatus === 'lost') return;
+    
+    // Guest Logic
+    if (gameMode === 'multi_guest') {
+        network.send({ type: 'RIGHT_CLICK_CELL', row, col });
+        return;
+    }
+
+    // Host/Single Logic
+    performFlagToggle(row, col);
+    
+    // Push to history
+    setFlagHistory(prev => [...prev, {row, col}]);
+  };
+
+  // Unified interaction handler for Mobile Toggle logic
+  const handleInteraction = (row: number, col: number) => {
+      if (inputMode === 'flag') {
+          handleRightClick(row, col);
+      } else {
+          handleCellClick(row, col);
+      }
+  };
+
+  const handleUndoFlag = () => {
+    if (gameStatus === 'won' || gameStatus === 'lost') return;
+    if (flagHistory.length === 0) return;
+
+    // Get last action
+    const lastAction = flagHistory[flagHistory.length - 1];
+    
+    if (gameMode === 'multi_guest') {
+        return; 
+    }
+
+    // Host/Single Logic
+    performFlagToggle(lastAction.row, lastAction.col); // Toggle it back
+    setFlagHistory(prev => prev.slice(0, -1)); // Remove from history
+  };
+
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.ctrlKey && e.key === 'z') {
+            handleUndoFlag();
+        }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [flagHistory, gameMode, board, flagsCount]);
 
   const handleReset = () => {
       if (gameMode === 'multi_guest') {
@@ -367,7 +431,7 @@ const App: React.FC = () => {
     setDifficulty(prev => {
         const newDiff = { ...prev, [key]: value };
         if (key === 'rows' || key === 'cols') {
-             if (value > 50) newDiff[key] = 50;
+             if (value > 1000) newDiff[key] = 1000;
              if (value < 5) newDiff[key] = 5;
         }
         const maxMines = (newDiff.rows * newDiff.cols) - 1;
@@ -403,6 +467,8 @@ const App: React.FC = () => {
                 onBack={handleBackToMenu}
                 guestConnected={guestConnected}
                 waitingForHost={waitingForHost}
+                currentDifficulty={difficulty}
+                onDifficultyChange={handleLobbyDifficultyChange}
             />
             {/* Theme toggle in menu */}
              <div className="absolute bottom-4 right-4 flex gap-2">
@@ -452,6 +518,7 @@ const App: React.FC = () => {
               zoomLevel={zoomLevel}
               onChangeZoom={setZoomLevel}
               onOpenLeaderboard={() => setShowLeaderboard(true)}
+              onUndoFlag={handleUndoFlag}
           />
 
           <div className="flex flex-col gap-2">
@@ -463,11 +530,15 @@ const App: React.FC = () => {
           <div className={`mt-auto pt-6 text-xs font-medium opacity-60 border-t ${theme.id === 'retro' ? 'border-gray-500' : 'border-white/10'} ${theme.textSecondary}`}>
              <div className="flex justify-between mb-2">
                <span>Открыть</span>
-               <span>Левый клик</span>
+               <span>Левый клик (или режим Копать)</span>
              </div>
              <div className="flex justify-between">
                <span>Флаг</span>
-               <span>Правый клик</span>
+               <span>Правый клик (или режим Флаг)</span>
+             </div>
+             <div className="flex justify-between mt-2 pt-2 border-t border-white/5">
+               <span>Отменить флаг</span>
+               <span>Ctrl + Z</span>
              </div>
           </div>
         </div>
@@ -488,7 +559,7 @@ const App: React.FC = () => {
                               key={`${rIndex}-${cIndex}`}
                               data={cell}
                               theme={theme}
-                              onClick={handleCellClick}
+                              onClick={handleInteraction}
                               onRightClick={handleRightClick}
                               disabled={gameStatus === 'won' || gameStatus === 'lost'}
                           />
@@ -501,6 +572,23 @@ const App: React.FC = () => {
                      <div className="animate-spin mr-2"><WifiOff/></div> Загрузка поля...
                  </div>
              )}
+        </div>
+
+        {/* Mobile Input Toggle - Fixed Bottom Right */}
+        <div className="absolute bottom-6 right-6 z-40 lg:hidden">
+             <button 
+                onClick={() => setInputMode(prev => prev === 'dig' ? 'flag' : 'dig')}
+                className={`w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all transform active:scale-90 border-4 ${
+                    inputMode === 'dig' 
+                    ? 'bg-blue-600 border-blue-400 text-white' 
+                    : 'bg-red-600 border-red-400 text-white'
+                }`}
+             >
+                {inputMode === 'dig' ? <Shovel size={28} /> : <Flag size={28} />}
+             </button>
+             <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/70 text-white text-xs px-2 py-1 rounded backdrop-blur-sm whitespace-nowrap opacity-0 animate-fade-in pointer-events-none">
+                 {inputMode === 'dig' ? 'Копать' : 'Флаг'}
+             </div>
         </div>
 
         {/* Overlay for Game Over / Win */}
