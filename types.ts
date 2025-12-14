@@ -116,3 +116,11 @@ export const THEMES: Theme[] = [
     }
   }
 ];
+
+export type NetworkAction = 
+  | { type: 'SYNC_BOARD'; board: BoardData; status: GameStatus; time: number; flags: number }
+  | { type: 'CLICK_CELL'; row: number; col: number }
+  | { type: 'RIGHT_CLICK_CELL'; row: number; col: number }
+  | { type: 'RESTART'; difficulty: Difficulty };
+
+export type GameMode = 'single' | 'multi_host' | 'multi_guest';
