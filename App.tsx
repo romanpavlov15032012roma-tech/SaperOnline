@@ -18,7 +18,7 @@ import Controls from './components/Controls';
 import Leaderboard from './components/Leaderboard';
 import Lobby from './components/Lobby';
 import confetti from 'canvas-confetti';
-import { Wifi, WifiOff, Shovel, Flag } from 'lucide-react';
+import { Wifi, WifiOff, Shovel, Flag, Menu, X, Play } from 'lucide-react';
 
 const App: React.FC = () => {
   // --- Game Config State ---
@@ -29,6 +29,7 @@ const App: React.FC = () => {
      // Auto-detect mobile
      return typeof window !== 'undefined' && window.innerWidth < 768;
   });
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   
   // --- Game Play State ---
   const [board, setBoard] = useState<BoardData>([]);
@@ -134,7 +135,7 @@ const App: React.FC = () => {
              const chunk = cells.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
              // Only send the final status on the last chunk to avoid premature game-over/win screens on guest
              const isLast = i === totalChunks - 1;
-             const intermediateStatus = (status === 'won' || status === 'lost') ? 'playing' : status;
+             const intermediateStatus: GameStatus = (status === 'won' || status === 'lost') ? 'playing' : status;
              
              network.send({
                 type: 'SYNC_CELLS',
@@ -156,6 +157,7 @@ const App: React.FC = () => {
                   setIsImmortal(data.isImmortal);
                   setWaitingForHost(false);
                   setGameMode('multi_guest');
+                  if (isMobileMode) setIsSidebarOpen(false); // Auto hide sidebar for guest
                   setTimeout(() => initGame(), 50);
               }
               if (data.type === 'SYNC_BOARD') {
@@ -270,6 +272,7 @@ const App: React.FC = () => {
       // Notify guest to start
       network.send({ type: 'START_GAME', difficulty, isImmortal: immortal });
       setGameMode('multi_host');
+      if (isMobileMode) setIsSidebarOpen(false); // Auto hide sidebar on start
       initGame();
       
       // Initial Sync
@@ -302,6 +305,7 @@ const App: React.FC = () => {
       setLobbyError(null);
       setGuestConnected(false);
       setWaitingForHost(false);
+      setIsSidebarOpen(true); // Reset sidebar state
   };
   
   const handleLobbyDifficultyChange = (newDiff: Difficulty) => {
@@ -568,6 +572,8 @@ const App: React.FC = () => {
              }, 50);
           }
       }
+      // On mobile, hide sidebar when starting/resetting a game
+      if (isMobileMode) setIsSidebarOpen(false);
   };
 
   const handleUpdateCustomSettings = (key: keyof Difficulty, value: number) => {
@@ -634,7 +640,10 @@ const App: React.FC = () => {
     <div className={`flex flex-col lg:flex-row h-screen w-screen overflow-hidden transition-colors duration-300 ${theme.appBg}`}>
       
       {/* SIDEBAR */}
-      <div className={`w-full lg:w-96 border-r shadow-2xl z-20 flex flex-col shrink-0 h-auto lg:h-full overflow-y-auto transition-colors duration-300 ${theme.panelBg} ${theme.panelBorder}`}>
+      <div className={`
+        ${isMobileMode && !isSidebarOpen ? 'hidden' : 'flex'} 
+        w-full lg:w-96 border-r shadow-2xl z-20 flex-col shrink-0 h-auto lg:h-full overflow-y-auto transition-colors duration-300 ${theme.panelBg} ${theme.panelBorder}
+      `}>
         <div className="p-6 md:p-8 flex flex-col gap-6">
           <div className="flex justify-between items-start">
             <div>
@@ -652,11 +661,23 @@ const App: React.FC = () => {
                     </span>
                 )}
             </div>
-            {gameMode !== 'single' && (
-                <div title={gameMode === 'multi_host' ? "Вы сервер" : "Подключено"} className="text-green-500 animate-pulse">
-                    <Wifi size={24} />
-                </div>
-            )}
+            
+            <div className="flex gap-2">
+                {gameMode !== 'single' && (
+                    <div title={gameMode === 'multi_host' ? "Вы сервер" : "Подключено"} className="text-green-500 animate-pulse">
+                        <Wifi size={24} />
+                    </div>
+                )}
+                {/* Mobile Close Button */}
+                {isMobileMode && (
+                    <button 
+                        onClick={() => setIsSidebarOpen(false)}
+                        className={`p-2 rounded-lg border hover:bg-white/10 ${theme.textSecondary} ${theme.panelBorder}`}
+                    >
+                        <X size={24} />
+                    </button>
+                )}
+            </div>
           </div>
 
           <Controls 
@@ -705,6 +726,16 @@ const App: React.FC = () => {
       {/* MAIN AREA */}
       <div className={`flex-1 relative overflow-hidden flex flex-col ${theme.boardBg}`}>
         
+        {/* Mobile Menu Toggle - visible when sidebar is closed on mobile */}
+        {isMobileMode && !isSidebarOpen && (
+            <button 
+                onClick={() => setIsSidebarOpen(true)}
+                className="absolute top-4 left-4 z-40 p-3 rounded-full bg-black/50 text-white backdrop-blur-md border border-white/10 shadow-lg hover:bg-black/70 active:scale-95 transition-all"
+            >
+                <Menu size={24} />
+            </button>
+        )}
+
         {/* Scrollable Container */}
         <div className="flex-1 w-full h-full overflow-auto flex items-center justify-center p-4">
              {/* The grid wrapper */}
@@ -734,7 +765,17 @@ const App: React.FC = () => {
 
         {/* Mobile Input Toggle - Conditionally Rendered */}
         {isMobileMode && (
-            <div className="absolute bottom-6 right-6 z-40">
+            <div className="absolute bottom-6 right-6 z-40 flex flex-col gap-4">
+                 {/* Quick Reset on Mobile Game Over (Optional, good UX) */}
+                 {(gameStatus === 'won' || gameStatus === 'lost') && (
+                     <button
+                        onClick={handleReset}
+                        className="w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all transform active:scale-90 border-4 bg-green-600 border-green-400 text-white animate-bounce"
+                     >
+                         <Play size={28} fill="currentColor" />
+                     </button>
+                 )}
+
                 <button 
                     onClick={() => setInputMode(prev => prev === 'dig' ? 'flag' : 'dig')}
                     className={`w-16 h-16 rounded-full shadow-2xl flex items-center justify-center transition-all transform active:scale-90 border-4 ${
@@ -745,7 +786,7 @@ const App: React.FC = () => {
                 >
                     {inputMode === 'dig' ? <Shovel size={28} /> : <Flag size={28} />}
                 </button>
-                <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/70 text-white text-xs px-2 py-1 rounded backdrop-blur-sm whitespace-nowrap opacity-0 animate-fade-in pointer-events-none">
+                <div className="absolute -top-10 right-0 bg-black/70 text-white text-xs px-2 py-1 rounded backdrop-blur-sm whitespace-nowrap opacity-0 animate-fade-in pointer-events-none">
                     {inputMode === 'dig' ? 'Копать' : 'Флаг'}
                 </div>
             </div>
